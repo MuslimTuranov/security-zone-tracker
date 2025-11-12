@@ -3,7 +3,8 @@ def run_detector():
     from ultralytics import YOLO
     import cvzone
     import json
-    import numpy 
+    import numpy
+    import time
 
     cap = cv2.VideoCapture("test.mp4")
 
@@ -11,7 +12,6 @@ def run_detector():
         restricted_zones = json.load(f)
 
     zone_points = numpy.array(restricted_zones[0]["points"])
-
     model = YOLO("yolov5su.pt")
 
     def is_inside_zone(box, zone_points):
@@ -20,14 +20,30 @@ def run_detector():
         cy = int((y1 + y2) / 2)
         return cv2.pointPolygonTest(zone_points, (cx, cy), False) >= 0
 
+    last_alarm_time = 0 
+    
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    
+    cv2.namedWindow("Detector")
+
+    def on_trackbar(val):
+        cap.set(cv2.CAP_PROP_POS_FRAMES, val)
+
+    cv2.createTrackbar("Position", "Detector", 0, total_frames - 1, on_trackbar)
+    
     while True:
         ret, frame = cap.read()
+        
         if not ret:
             break
 
-        results = model.track(frame, persist=True)
+        current_frame = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
+        cv2.setTrackbarPos("Position", "Detector", current_frame)
 
+        results = model.track(frame, persist=True)
         cv2.polylines(frame, [zone_points], isClosed=True, color=(0,0,255), thickness=2)
+
+        person_in_zone = False
 
         if results[0].boxes is not None and results[0].boxes.id is not None:
             boxes = results[0].boxes.xyxy.int().cpu().tolist()
@@ -36,13 +52,17 @@ def run_detector():
             confidences = results[0].boxes.conf.cpu().tolist()
 
             for box, class_id, track_id, conf in zip(boxes, class_ids, track_ids, confidences):
-                c = model.names[class_id]  
+                c = model.names[class_id]
                 x1, y1, x2, y2 = box
-                cv2.rectangle(frame,(x1,y1),(x2,y2),(0,255,0),2)
-                cvzone.putTextRect(frame,f'{track_id}',(x1,y1),1,1)
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0,255,0), 2)
+                cvzone.putTextRect(frame, f'{track_id}', (x1, y1), 1, 1)
 
                 if c == "person" and is_inside_zone(box, zone_points):
-                    cvzone.putTextRect(frame, "ALARM!", (50, 50), scale=2, thickness=2, colorR=(0,0,255))
+                    person_in_zone = True
+                    last_alarm_time = time.time()  
+
+        if time.time() - last_alarm_time < 3:
+            cvzone.putTextRect(frame, "ALARM!", (50, 50), scale=2, thickness=2, colorR=(0,0,255))
 
         cv2.imshow("RGB", frame)
         if cv2.waitKey(1) & 0xFF == ord("q"):
